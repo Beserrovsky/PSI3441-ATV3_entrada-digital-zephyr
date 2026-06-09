@@ -1,106 +1,85 @@
+/*
+ * Atividade 3 — GPIO via Registradores
+ * FRDM-KL25Z: controle do LED RGB usando acesso direto aos registradores
+ * do KL25Z (SIM_SCGC5, PCR, PDDR, PSOR, PCOR) sem usar a API Zephyr GPIO.
+ */
 #include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
 
-/*
- * IR sensor inputs (WH201): output LOW when line detected.
- * Adjust pin numbers to match the physical wiring on your board.
- */
-#define SENSOR_L_PIN    0   /* PTB0 — left sensor  */
-#define SENSOR_R_PIN    1   /* PTB1 — right sensor */
-#define SENSOR_GPIO     DT_NODELABEL(gpiob)
+/* SIM — System Integration Module (habilitação de clock dos ports) */
+#define SIM_SCGC5           (*((volatile uint32_t *)0x40048038U))
+#define SIM_SCGC5_PORTB     (1U << 10)
+#define SIM_SCGC5_PORTD     (1U << 12)
 
-/*
- * H-bridge outputs (e.g. L298N).
- * IN1/IN2 control Motor A (left wheel).
- * IN3/IN4 control Motor B (right wheel).
- * Adjust pins to match your wiring.
- */
-#define MOTOR_A_IN1     4   /* PTA4  */
-#define MOTOR_A_IN2     5   /* PTA5  */
-#define MOTOR_B_IN1    12   /* PTA12 */
-#define MOTOR_B_IN2    13   /* PTA13 */
-#define MOTOR_GPIO      DT_NODELABEL(gpioa)
+/* PORT — Pin Control Registers (multiplexação do pino) */
+#define PORTB_PCR18         (*((volatile uint32_t *)0x4004A048U))
+#define PORTB_PCR19         (*((volatile uint32_t *)0x4004A04CU))
+#define PORTD_PCR1          (*((volatile uint32_t *)0x4004C004U))
+#define PCR_MUX_GPIO        (1U << 8)   /* MUX = 001 seleciona função GPIO */
 
-static const struct device *gpiob = DEVICE_DT_GET(SENSOR_GPIO);
-static const struct device *gpioa = DEVICE_DT_GET(MOTOR_GPIO);
+/* GPIO B — registradores de direção e saída */
+#define GPIOB_PDDR          (*((volatile uint32_t *)0x400FF054U))
+#define GPIOB_PSOR          (*((volatile uint32_t *)0x400FF044U))   /* set (HIGH) */
+#define GPIOB_PCOR          (*((volatile uint32_t *)0x400FF048U))   /* clear (LOW) */
 
-static void motor_forward(void)
+/* GPIO D — registradores de direção e saída */
+#define GPIOD_PDDR          (*((volatile uint32_t *)0x400FF0D4U))
+#define GPIOD_PSOR          (*((volatile uint32_t *)0x400FF0C4U))
+#define GPIOD_PCOR          (*((volatile uint32_t *)0x400FF0C8U))
+
+/* Máscaras de bit para cada LED (active low: PCOR liga, PSOR desliga) */
+#define RED_MASK            (1U << 18)  /* PTB18 */
+#define GREEN_MASK          (1U << 19)  /* PTB19 */
+#define BLUE_MASK           (1U << 1)   /* PTD1  */
+
+static void gpio_regs_init(void)
 {
-    gpio_pin_set(gpioa, MOTOR_A_IN1, 1);
-    gpio_pin_set(gpioa, MOTOR_A_IN2, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN1, 1);
-    gpio_pin_set(gpioa, MOTOR_B_IN2, 0);
-}
+    /* 1. Habilita clock dos Port B e D via SIM_SCGC5 */
+    SIM_SCGC5 |= SIM_SCGC5_PORTB | SIM_SCGC5_PORTD;
 
-static void motor_turn_left(void)
-{
-    /* Stop left wheel, run right wheel */
-    gpio_pin_set(gpioa, MOTOR_A_IN1, 0);
-    gpio_pin_set(gpioa, MOTOR_A_IN2, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN1, 1);
-    gpio_pin_set(gpioa, MOTOR_B_IN2, 0);
-}
+    /* 2. Configura multiplexação dos pinos para GPIO (MUX=001) */
+    PORTB_PCR18 = PCR_MUX_GPIO;
+    PORTB_PCR19 = PCR_MUX_GPIO;
+    PORTD_PCR1  = PCR_MUX_GPIO;
 
-static void motor_turn_right(void)
-{
-    /* Run left wheel, stop right wheel */
-    gpio_pin_set(gpioa, MOTOR_A_IN1, 1);
-    gpio_pin_set(gpioa, MOTOR_A_IN2, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN1, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN2, 0);
-}
+    /* 3. Define pinos como saída no registrador de direção (PDDR) */
+    GPIOB_PDDR |= RED_MASK | GREEN_MASK;
+    GPIOD_PDDR |= BLUE_MASK;
 
-static void motor_stop(void)
-{
-    gpio_pin_set(gpioa, MOTOR_A_IN1, 0);
-    gpio_pin_set(gpioa, MOTOR_A_IN2, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN1, 0);
-    gpio_pin_set(gpioa, MOTOR_B_IN2, 0);
+    /* 4. Apaga todos os LEDs (active low: escrever 1 = desligado) */
+    GPIOB_PSOR = RED_MASK | GREEN_MASK;
+    GPIOD_PSOR = BLUE_MASK;
 }
 
 int main(void)
 {
-    if (!device_is_ready(gpiob) || !device_is_ready(gpioa)) {
-        return -1;
-    }
-
-    /* Sensor inputs with internal pull-up */
-    gpio_pin_configure(gpiob, SENSOR_L_PIN, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure(gpiob, SENSOR_R_PIN, GPIO_INPUT | GPIO_PULL_UP);
-
-    /* Motor outputs */
-    gpio_pin_configure(gpioa, MOTOR_A_IN1, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_A_IN2, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_B_IN1, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_B_IN2, GPIO_OUTPUT_LOW);
-
-    printk("=== Seguidor de Linha — Entrada Digital ===\n");
+    gpio_regs_init();
+    printk("=== GPIO via Registradores — FRDM-KL25Z ===\n");
 
     while (1) {
-        /*
-         * WH201: LOW (0) = line detected, HIGH (1) = no line.
-         * sensor value 0 means "on line" for this sensor.
-         */
-        int left  = gpio_pin_get(gpiob, SENSOR_L_PIN);
-        int right = gpio_pin_get(gpiob, SENSOR_R_PIN);
+        printk("Vermelho\n");
+        GPIOB_PCOR = RED_MASK;
+        k_msleep(1000);
+        GPIOB_PSOR = RED_MASK;
 
-        if (!left && !right) {
-            /* Both sensors on line — go straight */
-            motor_forward();
-        } else if (!left && right) {
-            /* Only left sensor on line — veer left */
-            motor_turn_left();
-        } else if (left && !right) {
-            /* Only right sensor on line — veer right */
-            motor_turn_right();
-        } else {
-            /* Both sensors off line — stop and wait */
-            motor_stop();
-        }
+        printk("Verde\n");
+        GPIOB_PCOR = GREEN_MASK;
+        k_msleep(1000);
+        GPIOB_PSOR = GREEN_MASK;
 
-        k_msleep(20);   /* 50 Hz control loop */
+        printk("Azul\n");
+        GPIOD_PCOR = BLUE_MASK;
+        k_msleep(1000);
+        GPIOD_PSOR = BLUE_MASK;
+
+        printk("Branco (R+G+B)\n");
+        GPIOB_PCOR = RED_MASK | GREEN_MASK;
+        GPIOD_PCOR = BLUE_MASK;
+        k_msleep(1000);
+        GPIOB_PSOR = RED_MASK | GREEN_MASK;
+        GPIOD_PSOR = BLUE_MASK;
+
+        k_msleep(500);
     }
 
     return 0;
