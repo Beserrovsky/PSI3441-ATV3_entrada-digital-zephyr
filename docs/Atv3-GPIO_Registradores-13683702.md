@@ -1,4 +1,4 @@
-# Relatório — Entrada Digital: Seguidor de Linha com Sensores IR
+# Relatório — LED via Registradores no FRDM-KL25Z
 
 ## Nome
 Felipe Beserra de Oliveira
@@ -14,102 +14,93 @@ Felipe Beserra de Oliveira
 
 ### Descrição da Atividade
 
-O experimento utiliza dois sensores de infravermelho WH201 como entradas digitais para controlar os motores de um carrinho seguidor de linha. Os sensores detectam a presença de uma faixa preta sobre superfície branca, e o programa decide a direção dos motores para manter o carrinho sobre a linha.
+O enunciado pede um programa que faça o LED verde da FRDM-KL25Z piscar com período de 2 segundos, configurando os registradores do microcontrolador diretamente (sem usar a API GPIO do Zephyr nem Device Tree), seguindo a sequência:
 
-### Hardware utilizado
+1. Habilitar o clock da porta B (`SIM_SCGC5`);
+2. Configurar o pino 19 (`PORTB_PCR19`);
+3. Setar a direção do pino (`GPIOB_PDDR`);
+4. Habilitar saída (`GPIOB_PCOR`, liga o LED);
+5. Função de espera;
+6. Desabilitar saída (`GPIOB_PSOR`, desliga o LED);
+7. Função de espera;
+8. Repetir os passos (4)-(7).
 
-| Componente | Descrição |
-|---|---|
-| Sensores IR | WH201 × 2 (saída digital) |
-| Ponte H | L298N (controla direção dos motores) |
-| Pino sensor esquerdo | PTB0 (entrada com pull-up interno) |
-| Pino sensor direito | PTB1 (entrada com pull-up interno) |
-| Motor A (esquerdo) | PTA4 (IN1), PTA5 (IN2) |
-| Motor B (direito) | PTA12 (IN3), PTA13 (IN4) |
+### Registradores utilizados
 
-### Lógica do sensor WH201
-
-O WH201 possui um comparador integrado que compara a reflectividade detectada com um limiar ajustável por potenciômetro:
-
-- **Saída LOW (0):** linha preta detectada
-- **Saída HIGH (1):** superfície branca (sem linha)
-
-Para a entrada digital, configurou-se o pull-up interno do KL25Z. Isso garante leitura estável mesmo com o sensor desconectado.
-
-### Lógica de controle (seguidor de linha)
-
-| Sensor esquerdo | Sensor direito | Ação |
+| Registrador | Endereço | Função |
 |---|---|---|
-| 0 (linha) | 0 (linha) | Frente (ambos motores ligados) |
-| 0 (linha) | 1 (sem linha) | Vira à esquerda (motor direito apenas) |
-| 1 (sem linha) | 0 (linha) | Vira à direita (motor esquerdo apenas) |
-| 1 (sem linha) | 1 (sem linha) | Para (ambos desligados) |
+| `SIM_SCGC5` | 0x40048038 | Habilita o clock do Port B (bit 10) |
+| `PORTB_PCR19` | 0x4004A04C | Configura o pino PTB19: MUX = 001 seleciona a função GPIO |
+| `GPIOB_PDDR` | 0x400FF054 | Define a direção do pino (1 = saída) |
+| `GPIOB_PSOR` | 0x400FF044 | *Set* — escrever 1 no bit coloca o pino em nível alto |
+| `GPIOB_PCOR` | 0x400FF048 | *Clear* — escrever 1 no bit coloca o pino em nível baixo |
 
-### Controle da ponte H (L298N)
+O LED verde da FRDM-KL25Z é *active low* (`0` = ligado, `1` = desligado), por isso `GPIOB_PCOR` liga o LED e `GPIOB_PSOR` desliga.
 
-A direção de cada motor é determinada pelos dois pinos de controle correspondentes:
+### Função de espera
 
-| IN1 | IN2 | Estado do motor |
-|---|---|---|
-| 1 | 0 | Para frente |
-| 0 | 1 | Para trás |
-| 0 | 0 | Parado (free-wheel) |
-| 1 | 1 | Freio (brake) |
+O enunciado original sugere uma função `delayMs()` baseada em um laço de contagem (busy-wait), apropriada para código bare-metal. Como o projeto roda sobre o Zephyr RTOS, foi usada a função do kernel `k_msleep(1000)` para os dois intervalos de 1 segundo (ligado e desligado), totalizando o período de 2 segundos pedido — equivalente em efeito, porém integrada ao escalonador do RTOS em vez de um laço de busy-wait bloqueante.
 
-### Loop de controle
+### Sobre o enunciado
 
-O programa executa a leitura dos sensores e atualiza os motores a cada 20 ms, equivalente a uma taxa de controle de 50 Hz. Essa frequência é suficiente para pistas com curvas suaves.
-
-Para otimizar o desempenho (curvas mais fechadas ou velocidades maiores), pode-se reduzir o intervalo de leitura ou adicionar controle PWM de velocidade para correções proporcionais.
+O enunciado oficial desta atividade é o arquivo `Atividade 3.pptx` (2 slides, com o pseudocódigo acima). Os materiais sobre um carrinho seguidor de linha com sensores infravermelhos WH201 (pasta `desconsiderar/` e o conteúdo do Notion "Atividade 3 - Entrada Digital") **não se aplicam** a esta entrega — são de uma versão diferente da atividade e foram ignorados, conforme já indicado pelo nome da pasta.
 
 ---
 
 ## Código (main.c)
 
 ```c
+/*
+ * Atividade 3 — GPIO via Registradores
+ * FRDM-KL25Z: pisca o LED verde (PTB19) com periodo de 2s usando
+ * acesso direto aos registradores do KL25Z (SIM_SCGC5, PCR, PDDR,
+ * PSOR, PCOR), sem usar a API Zephyr GPIO.
+ */
 #include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
 
-#define SENSOR_L_PIN    0
-#define SENSOR_R_PIN    1
-#define SENSOR_GPIO     DT_NODELABEL(gpiob)
+/* SIM — System Integration Module (habilitação de clock do Port B) */
+#define SIM_SCGC5           (*((volatile uint32_t *)0x40048038U))
+#define SIM_SCGC5_PORTB     (1U << 10)
 
-#define MOTOR_A_IN1     4
-#define MOTOR_A_IN2     5
-#define MOTOR_B_IN1    12
-#define MOTOR_B_IN2    13
-#define MOTOR_GPIO      DT_NODELABEL(gpioa)
+/* PORT — Pin Control Register (multiplexação do pino) */
+#define PORTB_PCR19         (*((volatile uint32_t *)0x4004A04CU))
+#define PCR_MUX_GPIO        (1U << 8)   /* MUX = 001 seleciona função GPIO */
 
-static const struct device *gpiob = DEVICE_DT_GET(SENSOR_GPIO);
-static const struct device *gpioa = DEVICE_DT_GET(MOTOR_GPIO);
+/* GPIO B — registradores de direção e saída */
+#define GPIOB_PDDR          (*((volatile uint32_t *)0x400FF054U))
+#define GPIOB_PSOR          (*((volatile uint32_t *)0x400FF044U))   /* set (HIGH) */
+#define GPIOB_PCOR          (*((volatile uint32_t *)0x400FF048U))   /* clear (LOW) */
 
-static void motor_forward(void)  { gpio_pin_set(gpioa, MOTOR_A_IN1, 1); gpio_pin_set(gpioa, MOTOR_A_IN2, 0); gpio_pin_set(gpioa, MOTOR_B_IN1, 1); gpio_pin_set(gpioa, MOTOR_B_IN2, 0); }
-static void motor_turn_left(void) { gpio_pin_set(gpioa, MOTOR_A_IN1, 0); gpio_pin_set(gpioa, MOTOR_A_IN2, 0); gpio_pin_set(gpioa, MOTOR_B_IN1, 1); gpio_pin_set(gpioa, MOTOR_B_IN2, 0); }
-static void motor_turn_right(void){ gpio_pin_set(gpioa, MOTOR_A_IN1, 1); gpio_pin_set(gpioa, MOTOR_A_IN2, 0); gpio_pin_set(gpioa, MOTOR_B_IN1, 0); gpio_pin_set(gpioa, MOTOR_B_IN2, 0); }
-static void motor_stop(void)      { gpio_pin_set(gpioa, MOTOR_A_IN1, 0); gpio_pin_set(gpioa, MOTOR_A_IN2, 0); gpio_pin_set(gpioa, MOTOR_B_IN1, 0); gpio_pin_set(gpioa, MOTOR_B_IN2, 0); }
+#define GREEN_MASK          (1U << 19)  /* PTB19 */
+
+static void gpio_regs_init(void)
+{
+    /* 1. Habilita clock do Port B via SIM_SCGC5 */
+    SIM_SCGC5 |= SIM_SCGC5_PORTB;
+
+    /* 2. Configura multiplexação do pino para GPIO (MUX=001) */
+    PORTB_PCR19 = PCR_MUX_GPIO;
+
+    /* 3. Define o pino como saída no registrador de direção (PDDR) */
+    GPIOB_PDDR |= GREEN_MASK;
+
+    /* 4. Apaga o LED (active low: escrever 1 = desligado) */
+    GPIOB_PSOR = GREEN_MASK;
+}
 
 int main(void)
 {
-    gpio_pin_configure(gpiob, SENSOR_L_PIN, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure(gpiob, SENSOR_R_PIN, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure(gpioa, MOTOR_A_IN1, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_A_IN2, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_B_IN1, GPIO_OUTPUT_LOW);
-    gpio_pin_configure(gpioa, MOTOR_B_IN2, GPIO_OUTPUT_LOW);
+    gpio_regs_init();
+    printk("=== Atividade 3 - LED verde via registradores (periodo 2s) ===\n");
 
     while (1) {
-        int left  = gpio_pin_get(gpiob, SENSOR_L_PIN);
-        int right = gpio_pin_get(gpiob, SENSOR_R_PIN);
-
-        if (!left && !right)     motor_forward();
-        else if (!left && right) motor_turn_left();
-        else if (left && !right) motor_turn_right();
-        else                     motor_stop();
-
-        k_msleep(20);
+        GPIOB_PCOR = GREEN_MASK;   /* liga (active low) */
+        k_msleep(1000);
+        GPIOB_PSOR = GREEN_MASK;   /* desliga */
+        k_msleep(1000);
     }
+
     return 0;
 }
 ```
@@ -119,5 +110,5 @@ int main(void)
 ## Repositório
 
 ```text
-https://github.com/Beserrovsky/Atividade-3
+https://github.com/Beserrovsky/PSI3441-ATV3_entrada-digital-zephyr
 ```
