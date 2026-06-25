@@ -1,11 +1,13 @@
 # Relatório — LED via Registradores no FRDM-KL25Z
 
 ## Nome
+
 Felipe Beserra de Oliveira
 
 ---
 
 ## Número USP
+
 13683702
 
 ---
@@ -27,23 +29,19 @@ O enunciado pede um programa que faça o LED verde da FRDM-KL25Z piscar com per�
 
 ### Registradores utilizados
 
-| Registrador | Endereço | Função |
-|---|---|---|
-| `SIM_SCGC5` | 0x40048038 | Habilita o clock do Port B (bit 10) |
-| `PORTB_PCR19` | 0x4004A04C | Configura o pino PTB19: MUX = 001 seleciona a função GPIO |
-| `GPIOB_PDDR` | 0x400FF054 | Define a direção do pino (1 = saída) |
-| `GPIOB_PSOR` | 0x400FF044 | *Set* — escrever 1 no bit coloca o pino em nível alto |
-| `GPIOB_PCOR` | 0x400FF048 | *Clear* — escrever 1 no bit coloca o pino em nível baixo |
+| Registrador     | Endereço  | Função                                                     |
+| --------------- | ---------- | ------------------------------------------------------------ |
+| `SIM_SCGC5`   | 0x40048038 | Habilita o clock do Port B (bit 10)                          |
+| `PORTB_PCR19` | 0x4004A04C | Configura o pino PTB19: MUX = 001 seleciona a função GPIO  |
+| `GPIOB_PDDR`  | 0x400FF054 | Define a direção do pino (1 = saída)                      |
+| `GPIOB_PSOR`  | 0x400FF044 | *Set* — escrever 1 no bit coloca o pino em nível alto    |
+| `GPIOB_PCOR`  | 0x400FF048 | *Clear* — escrever 1 no bit coloca o pino em nível baixo |
 
 O LED verde da FRDM-KL25Z é *active low* (`0` = ligado, `1` = desligado), por isso `GPIOB_PCOR` liga o LED e `GPIOB_PSOR` desliga.
 
 ### Função de espera
 
 O enunciado original sugere uma função `delayMs()` baseada em um laço de contagem (busy-wait), apropriada para código bare-metal. Como o projeto roda sobre o Zephyr RTOS, foi usada a função do kernel `k_msleep(1000)` para os dois intervalos de 1 segundo (ligado e desligado), totalizando o período de 2 segundos pedido — equivalente em efeito, porém integrada ao escalonador do RTOS em vez de um laço de busy-wait bloqueante.
-
-### Sobre o enunciado
-
-O enunciado oficial desta atividade é o arquivo `Atividade 3.pptx` (2 slides, com o pseudocódigo acima). Os materiais sobre um carrinho seguidor de linha com sensores infravermelhos WH201 (pasta `desconsiderar/` e o conteúdo do Notion "Atividade 3 - Entrada Digital") **não se aplicam** a esta entrega — são de uma versão diferente da atividade e foram ignorados, conforme já indicado pelo nome da pasta.
 
 ---
 
